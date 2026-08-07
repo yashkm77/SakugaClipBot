@@ -22,6 +22,14 @@ BASE_URL = "https://www.sakugabooru.com"
 ANIMATOR_CACHE = None
 
 
+# Manual animator aliases
+ANIMATOR_ALIASES = {
+    "weilin zhang": "weilin_zhang",
+    "yutaka nakamura": "yutaka_nakamura",
+    "keiichiro watanabe": "keiichiro_watanabe",
+}
+
+
 # -----------------------------
 # Discord setup
 # -----------------------------
@@ -43,6 +51,7 @@ async def get_random_clips(tag: str, amount: int = 4):
     url = f"{BASE_URL}/post.json?tags={tag}&limit=100"
 
     async with aiohttp.ClientSession() as session:
+
         async with session.get(url) as resp:
 
             if resp.status != 200:
@@ -66,6 +75,7 @@ async def get_random_clips(tag: str, amount: int = 4):
     return videos[:min(amount, len(videos))]
 
 
+
 # -----------------------------
 # Fuzzy animator lookup
 # -----------------------------
@@ -81,8 +91,9 @@ async def find_closest_animator_tag(query: str):
     async with aiohttp.ClientSession() as session:
 
 
-        # Exact lookup
+        # Exact lookup first
         url = f"{BASE_URL}/tag.json?name={query}&limit=1"
+
 
         async with session.get(url) as resp:
 
@@ -91,7 +102,9 @@ async def find_closest_animator_tag(query: str):
                 tags = await resp.json()
 
                 if tags:
+
                     return tags[0]["name"]
+
 
 
         # Build cache
@@ -122,7 +135,9 @@ async def find_closest_animator_tag(query: str):
                         name = tag.get("name", "")
 
 
-                        if "_" in name:
+                        # Ignore non-person tags
+                        if "_" in name and not name.startswith("not_"):
+
                             ANIMATOR_CACHE.append(name)
 
 
@@ -132,6 +147,12 @@ async def find_closest_animator_tag(query: str):
 
 
     for name in ANIMATOR_CACHE:
+
+
+        # Ignore bad matches
+        if name.startswith("not_"):
+            continue
+
 
         score = SequenceMatcher(
             None,
@@ -147,7 +168,12 @@ async def find_closest_animator_tag(query: str):
 
 
 
-    if best_score >= 0.68:
+    print(
+        f"Search: {query} | Match: {best} | Score: {best_score}"
+    )
+
+
+    if best_score >= 0.75:
 
         return best
 
@@ -175,7 +201,17 @@ async def clip(
     await interaction.response.defer()
 
 
-    tag = await find_closest_animator_tag(animator.strip())
+    search_name = animator.strip().lower()
+
+
+    if search_name in ANIMATOR_ALIASES:
+
+        tag = ANIMATOR_ALIASES[search_name]
+
+    else:
+
+        tag = await find_closest_animator_tag(search_name)
+
 
 
     clips = await get_random_clips(
@@ -222,10 +258,12 @@ async def clip(
 
     for post in clips:
 
+
         file_url = post.get("file_url")
 
 
         if file_url:
+
 
             if file_url.startswith("//"):
 
