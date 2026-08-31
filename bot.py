@@ -21,17 +21,17 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 
 BASE_URL = "https://www.sakugabooru.com"
 
-# How many clips /clip sends
+# Number of clips sent by /clip
 CLIP_AMOUNT = 4
 
-# Per-user cooldown in seconds
+# Per-user cooldown
 COOLDOWN_SECONDS = 5
 
-# How long clip results stay in memory
+# Clip cache duration
 CLIP_CACHE_SECONDS = 300  # 5 minutes
 
-# How long animator tag cache stays in memory
-# This cache lives until the bot restarts.
+# Animator tag cache
+# Built once and kept until the bot restarts.
 ANIMATOR_CACHE = None
 
 # Shared aiohttp session
@@ -41,13 +41,16 @@ HTTP_SESSION = None
 USER_COOLDOWNS = {}
 
 # Clip cache
+#
 # Format:
+#
 # {
-#     "animator_tag": {
+#     "yutaka_nakamura": {
 #         "time": 123456789,
 #         "clips": [...]
 #     }
 # }
+#
 CLIP_CACHE = {}
 
 
@@ -60,6 +63,9 @@ ANIMATOR_ALIASES = {
     "yutaka nakamura": "yutaka_nakamura",
     "keiichiro watanabe": "keiichiro_watanabe",
     "yoshinori kanada": "yoshinori_kanada",
+
+    # Vincent Chansard
+    "vincent chansard": "vincent_chansard",
 }
 
 
@@ -83,8 +89,8 @@ async def get_http_session():
     """
     Return the shared aiohttp session.
 
-    Instead of creating a new ClientSession for every request,
-    the bot reuses one session for its entire lifetime.
+    The bot reuses one HTTP session instead of creating a new
+    ClientSession for every command.
     """
 
     global HTTP_SESSION
@@ -117,6 +123,7 @@ def clean_animator_name(name: str) -> str:
     Clean Sakugabooru-style animator names.
 
     Example:
+
         Art;yutaka_nakamura
         ->
         yutaka nakamura
@@ -130,7 +137,13 @@ def clean_animator_name(name: str) -> str:
 
 def normalize_animator_query(name: str) -> str:
     """
-    Normalize the user's animator search.
+    Normalize a user's animator search.
+
+    Example:
+
+        Vincent    Chansard
+        ->
+        vincent chansard
     """
 
     name = clean_animator_name(name)
@@ -145,23 +158,32 @@ def get_remaining_cooldown(user_id: int):
     Return remaining cooldown time for a user.
 
     Returns:
-        float > 0 if user is on cooldown
-        0 if they can use the command
+        0 if the user can use /clip.
+        >0 if the user is still on cooldown.
     """
 
     now = time.monotonic()
 
-    last_used = USER_COOLDOWNS.get(user_id)
+    last_used = USER_COOLDOWNS.get(
+        user_id
+    )
 
     if last_used is None:
         return 0
 
     elapsed = now - last_used
 
-    remaining = COOLDOWN_SECONDS - elapsed
+    remaining = (
+        COOLDOWN_SECONDS - elapsed
+    )
 
     if remaining <= 0:
-        USER_COOLDOWNS.pop(user_id, None)
+
+        USER_COOLDOWNS.pop(
+            user_id,
+            None
+        )
+
         return 0
 
     return remaining
@@ -178,8 +200,8 @@ async def get_random_clips(
     """
     Get random video clips for an animator.
 
-    Results are cached for a few minutes so repeated searches
-    don't constantly hit Sakugabooru.
+    Results are cached for a few minutes to reduce repeated
+    requests to Sakugabooru.
     """
 
     now = time.monotonic()
@@ -192,21 +214,31 @@ async def get_random_clips(
 
     if cached:
 
-        cache_age = now - cached["time"]
+        cache_age = (
+            now - cached["time"]
+        )
 
         if cache_age < CLIP_CACHE_SECONDS:
 
             clips = cached["clips"]
 
             if clips:
+
                 return random.sample(
                     clips,
-                    min(amount, len(clips))
+                    min(
+                        amount,
+                        len(clips)
+                    )
                 )
 
         else:
+
             # Remove expired cache
-            CLIP_CACHE.pop(tag, None)
+            CLIP_CACHE.pop(
+                tag,
+                None
+            )
 
     # --------------------------------------------------------
     # FETCH FROM SAKUGABOORU
@@ -227,8 +259,9 @@ async def get_random_clips(
             if resp.status != 200:
 
                 print(
-                    f"Sakugabooru returned HTTP "
-                    f"{resp.status} for {tag}"
+                    f"Sakugabooru returned "
+                    f"HTTP {resp.status} "
+                    f"for {tag}"
                 )
 
                 return []
@@ -238,7 +271,8 @@ async def get_random_clips(
     except asyncio.TimeoutError:
 
         print(
-            f"Sakugabooru request timed out: {tag}"
+            f"Sakugabooru request timed out: "
+            f"{tag}"
         )
 
         return []
@@ -262,13 +296,14 @@ async def get_random_clips(
         return []
 
     # --------------------------------------------------------
-    # ONLY KEEP VIDEOS
+    # ONLY KEEP VIDEO POSTS
     # --------------------------------------------------------
 
     videos = [
         p
         for p in posts
-        if p.get("file_ext") in ("mp4", "webm")
+        if p.get("file_ext")
+        in ("mp4", "webm")
         and p.get("file_url")
     ]
 
@@ -290,14 +325,21 @@ async def get_random_clips(
 
     random.shuffle(videos)
 
-    return videos[:min(amount, len(videos))]
+    return videos[
+        :min(
+            amount,
+            len(videos)
+        )
+    ]
 
 
 # ============================================================
 # FUZZY ANIMATOR LOOKUP
 # ============================================================
 
-async def find_closest_animator_tag(query: str):
+async def find_closest_animator_tag(
+    query: str
+):
 
     global ANIMATOR_CACHE
 
@@ -313,11 +355,26 @@ async def find_closest_animator_tag(query: str):
     # --------------------------------------------------------
     # EXACT LOOKUP
     # --------------------------------------------------------
+    #
+    # IMPORTANT:
+    #
+    # We request multiple results and ONLY accept a tag whose
+    # name is exactly the requested tag.
+    #
+    # This prevents:
+    #
+    #     vincent_chansard
+    #
+    # from accidentally becoming:
+    #
+    #     not_vincent_chansard
+    #
+    # --------------------------------------------------------
 
     url = (
         f"{BASE_URL}/tag.json"
         f"?name={query}"
-        f"&limit=1"
+        f"&limit=20"
     )
 
     try:
@@ -328,9 +385,28 @@ async def find_closest_animator_tag(query: str):
 
                 tags = await resp.json()
 
-                if tags:
+                for tag in tags:
 
-                    return tags[0]["name"]
+                    tag_name = tag.get(
+                        "name",
+                        ""
+                    )
+
+                    # Never accept not_* tags
+                    if tag_name.startswith(
+                        "not_"
+                    ):
+                        continue
+
+                    # Only accept exact match
+                    if tag_name == query:
+
+                        print(
+                            f"Exact match: "
+                            f"{query}"
+                        )
+
+                        return tag_name
 
     except Exception as e:
 
@@ -362,13 +438,16 @@ async def find_closest_animator_tag(query: str):
 
             try:
 
-                async with session.get(url) as resp:
+                async with session.get(
+                    url
+                ) as resp:
 
                     if resp.status != 200:
 
                         print(
-                            f"Tag cache request failed "
-                            f"on page {page}: "
+                            f"Tag cache request "
+                            f"failed on page "
+                            f"{page}: "
                             f"HTTP {resp.status}"
                         )
 
@@ -379,8 +458,8 @@ async def find_closest_animator_tag(query: str):
             except Exception as e:
 
                 print(
-                    f"Tag cache failed on page "
-                    f"{page}: {e}"
+                    f"Tag cache failed on "
+                    f"page {page}: {e}"
                 )
 
                 break
@@ -392,10 +471,21 @@ async def find_closest_animator_tag(query: str):
                     ""
                 )
 
-                # Ignore obvious non-person tags
-                if "_" in name and not name.startswith("not_"):
+                # ------------------------------------------------
+                # NEVER INCLUDE not_* TAGS
+                # ------------------------------------------------
 
-                    ANIMATOR_CACHE.append(name)
+                if name.startswith(
+                    "not_"
+                ):
+                    continue
+
+                # Keep tags containing underscores
+                if "_" in name:
+
+                    ANIMATOR_CACHE.append(
+                        name
+                    )
 
         print(
             f"Animator cache built: "
@@ -411,7 +501,10 @@ async def find_closest_animator_tag(query: str):
 
     for name in ANIMATOR_CACHE:
 
-        if name.startswith("not_"):
+        # Extra protection
+        if name.startswith(
+            "not_"
+        ):
             continue
 
         score = SequenceMatcher(
@@ -431,8 +524,17 @@ async def find_closest_animator_tag(query: str):
         f"Score: {best_score:.3f}"
     )
 
+    # --------------------------------------------------------
+    # ACCEPT FUZZY MATCH
+    # --------------------------------------------------------
+
     if best_score >= 0.75:
+
         return best
+
+    # --------------------------------------------------------
+    # NO GOOD MATCH
+    # --------------------------------------------------------
 
     return query
 
@@ -444,8 +546,8 @@ async def find_closest_animator_tag(query: str):
 @bot.tree.command(
     name="clip",
     description=(
-        "Get 3-4 random Sakugabooru clips "
-        "from an animator"
+        "Get 3-4 random Sakugabooru "
+        "clips from an animator"
     )
 )
 @app_commands.describe(
@@ -472,8 +574,11 @@ async def clip(
     if remaining > 0:
 
         await interaction.response.send_message(
-            f"⏳ Please wait **{remaining:.1f}s** "
-            f"before using `/clip` again.",
+            (
+                f"⏳ Please wait "
+                f"**{remaining:.1f}s** "
+                f"before using `/clip` again."
+            ),
             ephemeral=True
         )
 
@@ -494,8 +599,10 @@ async def clip(
     # CLEAN QUERY
     # --------------------------------------------------------
 
-    search_name = normalize_animator_query(
-        animator
+    search_name = (
+        normalize_animator_query(
+            animator
+        )
     )
 
     # --------------------------------------------------------
@@ -507,6 +614,11 @@ async def clip(
         tag = ANIMATOR_ALIASES[
             search_name
         ]
+
+        print(
+            f"Alias match: "
+            f"{search_name} -> {tag}"
+        )
 
     else:
 
@@ -535,8 +647,10 @@ async def clip(
     if not clips:
 
         await interaction.followup.send(
-            f"No clips found for "
-            f"**{display_name}**."
+            (
+                f"No clips found for "
+                f"**{display_name}**."
+            )
         )
 
         return
@@ -548,8 +662,8 @@ async def clip(
     embed = discord.Embed(
         title=display_name,
         description=(
-            "Here are some random clips from "
-            "Sakugabooru.\n\n"
+            "Here are some random clips "
+            "from Sakugabooru.\n\n"
             "Use **/clip <animator name>** "
             "for more."
         ),
@@ -585,12 +699,14 @@ async def clip(
         if not file_url:
             continue
 
+        # Handle protocol-relative URLs
         if file_url.startswith("//"):
 
             file_url = (
                 "https:" + file_url
             )
 
+        # Handle relative URLs
         elif file_url.startswith("/"):
 
             file_url = (
@@ -660,7 +776,7 @@ async def on_ready():
 
 
 # ============================================================
-# SHUTDOWN
+# DISCONNECT
 # ============================================================
 
 @bot.event
@@ -690,9 +806,13 @@ try:
 finally:
 
     if HTTP_SESSION is not None:
+
         try:
+
             asyncio.run(
                 HTTP_SESSION.close()
             )
+
         except Exception:
+
             pass
