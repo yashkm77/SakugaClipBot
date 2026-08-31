@@ -1,4 +1,3 @@
-```python
 import os
 import random
 import time
@@ -697,4 +696,3 @@ finally:
             )
         except Exception:
             pass
-```
